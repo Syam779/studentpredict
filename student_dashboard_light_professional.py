@@ -1,3 +1,6 @@
+# student_dashboard_light_professional.py
+# Single-file polished Streamlit dashboard (updated to avoid deprecation warnings
+# and improve model loading robustness for XGBoost/pickled models).
 
 import os
 import json
@@ -13,6 +16,12 @@ import time
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 import warnings
+
+# Add pkg_resources import to help with older pickles that reference it
+try:
+    import pkg_resources  # noqa: F401
+except Exception:
+    pkg_resources = None
 
 # suppress noisy sklearn warnings optionally
 try:
@@ -143,7 +152,6 @@ DATA_PATH  = "cleaned_dataset.csv"   # upload this file
 MODEL_PATH = "student_performance_model.pkl"
 FEAT_PATH  = "model_features.json"
 
-
 # ---- Loaders with caching ----
 @st.cache_data(show_spinner=False)
 def load_data(path):
@@ -174,6 +182,7 @@ def load_model_and_features(mpath, fpath):
     model_error = None
     if os.path.exists(mpath):
         try:
+            # joblib.load may raise module-related errors if dependencies missing
             model = joblib.load(mpath)
         except Exception as e:
             model = None
@@ -191,6 +200,26 @@ def load_model_and_features(mpath, fpath):
 # ---- Load data & model ----
 df = load_data(DATA_PATH)
 model, model_features, model_load_error = load_model_and_features(MODEL_PATH, FEAT_PATH)
+
+# Post-load model compatibility fixes (best-effort):
+if model is not None:
+    try:
+        lowname = model.__class__.__name__.lower()
+        # If model was saved from XGBoost and relies on deprecated attribute
+        if "xgb" in lowname or "xgboost" in lowname:
+            if not hasattr(model, "use_label_encoder"):
+                try:
+                    setattr(model, "use_label_encoder", False)
+                except Exception:
+                    pass
+        # Some models expect an sklearn-style classes_ attribute or label encoder flags:
+        if not hasattr(model, "predict"):
+            # not a model we can use — mark error
+            model_load_error = f"Loaded object has no predict method: {model.__class__.__name__}"
+            model = None
+    except Exception as e:
+        model_load_error = f"Model post-load check error: {e}"
+        model = None
 
 # ---- SHAP setup (background builder that matches model_features exactly) ----
 explainer = None
@@ -341,7 +370,8 @@ st.markdown("<div class='full-width'>", unsafe_allow_html=True)
 # Navigation + page selection
 with st.container():
     st.markdown("<div class='card'><div style='display:flex;align-items:center;justify-content:space-between'><div><strong style='font-size:16px'>Explore</strong><div class='small'>Choose a section below</div></div></div></div>", unsafe_allow_html=True)
-page = st.radio("", ["Home","Dashboard","Deep Insights","Predict & Simulate"], index=0, label_visibility="collapsed", horizontal=True)
+# Give a non-empty (but hidden) label to avoid accessibility warning.
+page = st.radio("Navigation", ["Home","Dashboard","Deep Insights","Predict & Simulate"], index=0, label_visibility="collapsed", horizontal=True)
 
 # ---------- ABOUT INPUTS & REFERENCES ----------
 about_text = """
@@ -392,7 +422,8 @@ if page == "Home":
         if df.empty:
             st.info("No data loaded (check DATA_PATH).")
         else:
-            st.dataframe(df.head(10), use_container_width=True)
+            # Use the new width parameter per Streamlit deprecation message
+            st.dataframe(df.head(10), width="stretch")
 
 # ---------- Page: Dashboard ----------
 elif page == "Dashboard":
@@ -401,7 +432,7 @@ elif page == "Dashboard":
         fig = px.histogram(df, x="FinalGrade", nbins=30, color_discrete_sequence=[MUTED_SEQ[0]])
         fig.update_traces(marker_line_width=0)
         fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color="#0b1220")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
     else:
         st.info("FinalGrade missing or dataset empty.")
 
@@ -412,14 +443,15 @@ elif page == "Dashboard":
             df_plot = df.copy()
             fig2 = px.scatter(df_plot, x="StudyHours", y="FinalGrade", opacity=0.75, color_discrete_sequence=[MUTED_SEQ[1]])
             fig2.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color="#0b1220")
-            st.plotly_chart(fig2, use_container_width=True)
+            st.plotly_chart(fig2, width="stretch")
         else:
             st.info("StudyHours or FinalGrade missing.")
     with c2:
         st.markdown("<div class='card'><div class='card-title'>Top Students</div></div>", unsafe_allow_html=True)
         if "FinalGrade" in df.columns and len(df)>0:
             cols_to_show = [c for c in ["FinalGrade","StudyHours","Attendance"] if c in df.columns]
-            st.table(df.sort_values("FinalGrade", ascending=False).head(5)[cols_to_show])
+            # st.table doesn't have width param; use st.dataframe for better styling
+            st.dataframe(df.sort_values("FinalGrade", ascending=False).head(5)[cols_to_show], width="stretch")
         else:
             st.info("No data to show.")
 
@@ -474,10 +506,9 @@ elif page == "Deep Insights":
         st.markdown(f"<div class='small' style='margin-top:8px'>Filtered rows: <strong style='color:#0b1220'>{len(df_work):,}</strong> (from {len(df):,})</div>", unsafe_allow_html=True)
         st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
-        # Visualizer (omitted repeating code for brevity, same as earlier)
+        # Visualizer
         vis_cols = st.multiselect("Choose numeric columns to visualize (1-6)", num_cols, default=num_cols[:3])
         plot_type = st.radio("Plot type", ["Histogram","Box","Violin","Scatter"], index=0, horizontal=True)
-        # ... same plotting logic as before (kept) ...
         if plot_type in ["Histogram","Box","Violin"]:
             for c in vis_cols[:4]:
                 st.markdown(f"<div class='card'><div class='card-title'>{plot_type}: {c}</div></div>", unsafe_allow_html=True)
@@ -497,7 +528,7 @@ elif page == "Deep Insights":
                     else:
                         fig = px.violin(df_work, y=c, box=True, points="all", color_discrete_sequence=[MUTED_SEQ[0]])
                 fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color="#0b1220")
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
         elif plot_type == "Scatter":
             if len(vis_cols) < 2:
                 st.info("Select at least 2 numeric columns for scatter.")
@@ -516,10 +547,7 @@ elif page == "Deep Insights":
                 else:
                     fig = px.scatter(df_plot2, x=xcol, y=ycol, opacity=0.75, color_discrete_sequence=[MUTED_SEQ[1]])
                 fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color="#0b1220")
-                st.plotly_chart(fig, use_container_width=True)
-
-        # PCA & Clustering (same logic as earlier)
-        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+                st.plotly_chart(fig, width="stretch")
 
         # Apply model to filtered data (keeps original robust prediction batching)
         st.markdown("<div class='card'><div class='card-title'>Apply model to filtered data</div></div>", unsafe_allow_html=True)
@@ -532,7 +560,7 @@ elif page == "Deep Insights":
                 sample_n = min(10, len(df_work))
                 sample_preview = df_work.head(sample_n)
                 st.markdown(f"#### Sample preview (first {sample_n} rows)")
-                st.dataframe(sample_preview, use_container_width=True)
+                st.dataframe(sample_preview, width="stretch")
                 st.session_state["preview_ready"] = True
                 st.session_state["preview_count"] = len(df_work)
 
@@ -616,7 +644,7 @@ elif page == "Deep Insights":
                                 if "FinalGrade" in results_df.columns:
                                     results_df["Delta"] = results_df["PredictedGrade"] - results_df["FinalGrade"]
                                 st.markdown("#### Predictions for filtered rows (first 200 shown)")
-                                st.dataframe(results_df.head(200), use_container_width=True)
+                                st.dataframe(results_df.head(200), width="stretch")
                                 csv_out = results_df.to_csv(index=False)
                                 st.download_button("Download predictions CSV", csv_out, file_name="predictions_filtered.csv", mime="text/csv")
                             else:
@@ -718,14 +746,20 @@ elif page == "Predict & Simulate":
 
         if st.button("🚀 Predict Now"):
             if model is None:
-                st.error("Model not loaded.")
+                # Provide helpful next steps
+                st.error("Model not loaded. See Model & Methodology below for details.")
             elif X_input is None:
                 st.error("Invalid model input (check model_features.json).")
             else:
                 try:
                     pred = float(model.predict(X_input)[0])
                 except Exception as e:
-                    st.error(f"Prediction failed: {e}")
+                    # show extra hint if it's an XGBoost label encoder issue
+                    err_str = str(e)
+                    if "use_label_encoder" in err_str or "XGClassifier" in err_str or "XGBClassifier" in err_str:
+                        st.error(f"Prediction failed (XGBoost compatibility): {err_str}. Try adding xgboost to requirements or re-saving model with current xgboost/sklearn versions.")
+                    else:
+                        st.error(f"Prediction failed: {err_str}")
                     pred = None
 
                 if pred is not None:
@@ -792,7 +826,7 @@ elif page == "Predict & Simulate":
                     else:
                         rec_df = pd.DataFrame(results).sort_values("delta", ascending=False, na_position="last").reset_index(drop=True)
                         st.markdown("#### Top Suggestions")
-                        st.dataframe(rec_df[["action","old_value","new_value","predicted_grade","delta"]], use_container_width=True)
+                        st.dataframe(rec_df[["action","old_value","new_value","predicted_grade","delta"]], width="stretch")
 
                     # SHAP explainability (if available)
                     if SHAP_AVAILABLE and explainer is not None:
@@ -810,7 +844,7 @@ elif page == "Predict & Simulate":
                                 imp_df = pd.DataFrame({"feature": fnames, "shap_abs": np.abs(sv)}).sort_values("shap_abs", ascending=False).head(12)
                                 fig = px.bar(imp_df, x="shap_abs", y="feature", orientation="h", color_discrete_sequence=[MUTED_SEQ[2]])
                                 fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color="#0b1220")
-                                st.plotly_chart(fig, use_container_width=True)
+                                st.plotly_chart(fig, width="stretch")
                             except Exception as e:
                                 st.warning(f"Could not render SHAP plots: {e}")
                         else:
@@ -827,7 +861,15 @@ with st.expander("Model & Methodology (what model is used and why)", expanded=Tr
     if model is None:
         st.markdown("<div class='small'>No model file loaded. Place your trained model at MODEL_PATH to enable predictions. The UI will explain the model once loaded.</div>", unsafe_allow_html=True)
         st.markdown("<div class='small'>Model load error (if any):</div>")
-        st.text(model_load_error)
+        if model_load_error:
+            st.text(model_load_error)
+            # Provide actionable hints
+            if "xgboost" in (model_load_error or "").lower():
+                st.warning("Model load error mentions XGBoost. Add `xgboost` to requirements.txt and redeploy, or re-save the model with joblib using the runtime's xgboost version.")
+            if "pkg_resources" in (model_load_error or "").lower() or "pkg_resources" in str(model_load_error):
+                st.warning("Model pickled object referenced pkg_resources. Make sure setuptools/wheel are available in the environment.")
+        else:
+            st.text("No model loaded (no error message).")
     else:
         mname = model.__class__.__name__
         st.markdown(f"<div class='card'><div class='card-title'>Model detected: {mname}</div></div>", unsafe_allow_html=True)
@@ -860,12 +902,12 @@ with st.expander("Model & Methodology (what model is used and why)", expanded=Tr
 """, unsafe_allow_html=True)
 
     # Provide guidance on how to re-train or replace model (short)
-    st.markdown("<div class='small' style='margin-top:8px'>To replace the model: train a model that expects features listed in <code>model_features.json</code>, save with joblib.dump(model, MODEL_PATH), and restart Streamlit. The feature order and names must match exactly for predictions and SHAP to work.</div>", unsafe_allow_html=True)
+    st.markdown("<div class='small' style='margin-top:8px'>To replace the model: train a model that expects features listed in <code>model_features.json</code>, save with <code>joblib.dump(model, MODEL_PATH)</code>, and restart Streamlit. If you used XGBoost, include the same xgboost version in requirements.txt. The feature order and names must match exactly for predictions and SHAP to work.</div>", unsafe_allow_html=True)
 
 # Floating 'scroll to top' button
 st.markdown("<button class='scroll-top' onclick='scrollTop()'>↑ Top</button>", unsafe_allow_html=True)
 
 # Footer
-st.markdown("<div class='app-footer'>Built with Streamlit — UI upgraded (full-width, clear inputs & explanations). References included for methodology.</div>", unsafe_allow_html=True)
+st.markdown("<div class='app-footer'>Built with Streamlit — UI upgraded (full-width, clearer inputs & explanations). References included for methodology.</div>", unsafe_allow_html=True)
 
-
+# End of file
