@@ -146,9 +146,10 @@ class TwoStageRegressor:
         return yhat
 
 # ---- Paths (adjust if needed) ----
-DATA_PATH  = "C:/studentproject/data/cleaned_dataset.csv"
-MODEL_PATH = "C:/studentproject/models/student_performance_model.pkl"
-FEAT_PATH  = "C:/studentproject/models/model_features.json"
+DATA_PATH  = "cleaned_dataset.csv"   # upload this file
+MODEL_PATH = "student_performance_model.pkl"
+FEAT_PATH  = "model_features.json"
+
 
 # ---- Loaders with caching ----
 @st.cache_data(show_spinner=False)
@@ -873,3 +874,4 @@ st.markdown("<button class='scroll-top' onclick='scrollTop()'>↑ Top</button>",
 
 # Footer
 st.markdown("<div class='app-footer'>Built with Streamlit — UI upgraded (full-width, clear inputs & explanations). References included for methodology.</div>", unsafe_allow_html=True)
+
