@@ -7,3 +7,5 @@ seaborn
 scikit-learn
 joblib
 shap
+xgboost==1.7.6
+
