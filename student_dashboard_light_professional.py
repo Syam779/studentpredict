@@ -1,11 +1,4 @@
-# student_dashboard_light_professional.py
-"""
-Student Performance — Polished Single-file Streamlit app (full-width, no right panel)
-Includes:
- - SHAP background fix (match model_features exactly)
- - User-friendly input explanations + "About inputs" expander with references (APA)
- - Automatic Model & Methodology explanation area
-"""
+
 import os
 import json
 import joblib
@@ -874,4 +867,5 @@ st.markdown("<button class='scroll-top' onclick='scrollTop()'>↑ Top</button>",
 
 # Footer
 st.markdown("<div class='app-footer'>Built with Streamlit — UI upgraded (full-width, clear inputs & explanations). References included for methodology.</div>", unsafe_allow_html=True)
+
 
